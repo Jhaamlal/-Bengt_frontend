@@ -1,9 +1,11 @@
 import React, { useState } from "react"
 import axios from "axios"
 import languageEncoding from "detect-file-encoding-and-language"
+import { BACKEND_URL } from "../utils/constants"
 
 function FileUpload() {
   const [uploadId, setUploadId] = useState({})
+
   if (typeof window !== "undefined") {
     let videoData = document.getElementById("videoFile")
     videoData?.addEventListener("change", (e) => {
@@ -35,65 +37,61 @@ function FileUpload() {
     const fileName = file.name
     const fileSize = file.size
     const fileType = file.type.split("/")[1]
-    const url = "http://localhost:8080/aws"
+    const url = `${BACKEND_URL}/aws`
 
     try {
       let res = await axios.post(`${url}/getUploadId`, { fileName: fileName })
       const uploadTempId = res.data.uploadId
       console.log(uploadTempId)
       setUploadId(uploadTempId)
-      const chunkSize = 10 * 1024 * 1024
+      const chunkSize = 6 * 1024 * 1024
       const chunkCount = Math.floor(fileSize / chunkSize) + 1
       console.log(`ChunkCount: ${chunkCount}`)
 
       //   multipart url
       let multiUploadArray = []
+
+      let getSignedUrlRes = await axios.post(`${url}/getUploadPart`, {
+        fileName,
+        partNumber: chunkCount,
+        uploadId: uploadTempId.UploadId,
+        fileType,
+      })
+
+      const allPartUploadPromises = []
+
       for (let uploadCount = 1; uploadCount < chunkCount + 1; uploadCount++) {
-        let getSignedUrlRes = await axios.post(`${url}/getUploadPart`, {
-          fileName,
-          partNumber: uploadCount,
-          uploadId: uploadTempId.UploadId,
-          fileType,
-        })
         let start = (uploadCount - 1) * chunkSize
         let end = uploadCount * chunkSize
         let fileBlob =
           uploadCount < chunkCount ? file.slice(start, end) : file.slice(start)
-        let preSignedUrl = getSignedUrlRes.data.parts[0].signedUrl
-        console.log(`preSigned ${uploadCount}:${preSignedUrl}`)
-        // fileBlob.type = fileType
-        console.log(`File blob  ${fileBlob}`)
 
-        let uploadChunk = await axios.put(preSignedUrl, fileBlob)
-        // let uploadChunk = await fetch(preSignedUrl, {
-        //   method: "PUT",
-        //   body: fileBlob,
-        // })
+        let preSignedUrl = getSignedUrlRes.data.parts[uploadCount - 1].signedUrl
 
-        console.log(`Upload Chunks ${uploadChunk}`)
-        console.log(`Upload Item ${uploadChunk}`)
-        //
+        allPartUploadPromises.push(
+          axios.put(preSignedUrl, fileBlob).then((response) => {
+            let EtagHeader = response.headers["etag"]
 
-        let EtagHeader = uploadChunk.headers.get("ETag")
-        console.log(EtagHeader)
-        let uploadPartDetails = {
-          ETag: EtagHeader,
-          PartNumber: uploadCount,
-        }
-        multiUploadArray.push(uploadPartDetails)
+            let uploadPartDetails = {
+              ETag: EtagHeader,
+              PartNumber: uploadCount,
+            }
+            multiUploadArray.push(uploadPartDetails)
+          })
+        )
       }
+
+      await Promise.all(allPartUploadPromises)
 
       console.log(`Multipart array ${multiUploadArray}`)
 
-      const completeUpload = await axios.post(`${url}/completeUpload`, {
+      await axios.post(`${url}/completeUpload`, {
         fileName: fileName,
         parts: multiUploadArray,
         uploadId: uploadTempId.UploadId,
       })
-
-      console.log(completeUpload.data, "Complete upload response")
     } catch (error) {
-      console.log(err, err.stack)
+      console.log(error)
     }
   }
 
@@ -102,7 +100,7 @@ function FileUpload() {
     const multipart_fileInput = document.getElementById("videoFile")
     const file = multipart_fileInput.files[0]
     const fileName = file.name
-    const url = "http://localhost:8080/aws"
+    const url = `${BACKEND_URL}/aws`
     console.log({ fileName: fileName, uploadId: uploadId })
     axios
       .post(`${url}/abortUpload`, {
